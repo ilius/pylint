@@ -111,6 +111,7 @@ class TextReporter(BaseReporter):
 
     name = "text"
     extension = "txt"
+    # pylint: disable-next=possible-forgotten-f-prefix
     line_format = "{path}:{line}:{column}: {msg_id}: {msg} ({symbol})"
 
     def __init__(self, output: TextIO | None = None) -> None:
@@ -186,6 +187,7 @@ class ParseableTextReporter(TextReporter):
     """
 
     name = "parseable"
+    # pylint: disable-next=possible-forgotten-f-prefix
     line_format = "{path}:{line}: [{msg_id}({symbol}), {obj}] {msg}"
 
     def __init__(self, output: TextIO | None = None) -> None:
@@ -201,6 +203,7 @@ class VSTextReporter(ParseableTextReporter):
     """Visual studio text reporter."""
 
     name = "msvs"
+    # pylint: disable-next=possible-forgotten-f-prefix
     line_format = "{path}({line}): [{msg_id}({symbol}){obj}] {msg}"
 
 

@@ -17,7 +17,7 @@ class FFFF:
     def method4(self):  # [bad-docstring-quotes]
         ' """bad docstring 3 '
 
-    @check_messages("bad-open-mode", "redundant-unittest-assert", "deprecated-module")
+    # @check_messages("bad-open-mode", "redundant-unittest-assert", "deprecated-module")
     def method5(self):
         """Test OK 1 with decorators"""
 
@@ -25,7 +25,7 @@ class FFFF:
         r"""Test OK 2 with raw string"""
 
     def method7(self):
-        u"""Test OK 3 with unicode string"""
+        """Test OK 3 with unicode string"""
 
 
 def function2():

@@ -6,13 +6,14 @@
 
 from __future__ import annotations
 
+import ast
 import collections
 import re
 import sys
 import tokenize
 from collections import Counter
 from collections.abc import Iterable, Sequence
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, Union
 
 import astroid
 from astroid import bases, nodes, util
@@ -192,6 +193,12 @@ MSGS: dict[str, MessageDefinitionTuple] = (
             "format-string-without-interpolation",
             "Used when we detect a string that does not have any interpolation variables, "
             "in which case it can be either a normal string without formatting or a bug in the code.",
+        ),
+        "W1311": (
+            "The '%s' syntax implies an f-string but the leading 'f' is missing",
+            "possible-forgotten-f-prefix",
+            "Used when we detect a string that uses '{}' with a local variable or valid "
+            "expression inside. This string is probably meant to be an f-string.",
         ),
     }
 )
@@ -996,12 +1003,103 @@ class StringConstantChecker(BaseTokenChecker, BaseRawFileChecker):
             # character can never be the start of a new backslash escape.
             index += 2
 
-    @only_required_for_messages("redundant-u-string-prefix")
-    def visit_const(self, node: nodes.Const) -> None:
+    # @check_messages("possible-forgotten-f-prefix")
+    # @check_messages("redundant-u-string-prefix")
+    def visit_const(self, node: nodes.Const):
         if node.pytype() == "builtins.str" and not isinstance(
             node.parent, nodes.JoinedStr
         ):
-            self._detect_u_string_prefix(node)
+            self._detect_possible_f_string(node)
+        self._detect_u_string_prefix(node)
+
+    def _detect_possible_f_string(self, node: nodes.Const):
+        """Check whether strings include local/global variables in '{}'
+        Those should probably be f-strings's
+        """
+
+        def detect_if_used_in_format(node: nodes.Const) -> bool:
+            """A helper function that checks if the node is used
+            in a call to format() if so returns True"""
+
+            def get_all_format_calls(node: nodes.Const) -> set:
+                """Return a set of all calls to format()"""
+                calls = set()
+                # The skip_class is to make sure we don't go into inner scopes
+                for call in node.scope().nodes_of_class(
+                    nodes.Attribute, skip_klass=(nodes.FunctionDef,)
+                ):
+                    if call.attrname == "format":
+                        if isinstance(call.expr, nodes.Name):
+                            calls.add(call.expr.name)
+                        elif isinstance(call.expr, nodes.Subscript):
+                            slice_repr = [call.expr.value, call.expr.slice.value]
+                            while not isinstance(slice_repr[0], nodes.Name):
+                                slice_repr = [
+                                    slice_repr[0].value,
+                                    slice_repr[0].slice.value,
+                                ] + slice_repr[1:]
+                            calls.add(tuple(slice_repr[0].name) + tuple(slice_repr[1:]))
+                return calls
+
+            def check_match_in_calls(
+                assignment: Union[nodes.AssignName, nodes.Subscript]
+            ) -> bool:
+                """Check if the node to which is being assigned is used in a call to format()"""
+                format_calls = get_all_format_calls(node)
+                if isinstance(assignment, nodes.AssignName):
+                    if assignment.name in format_calls:
+                        return True
+                elif isinstance(assignment, nodes.Subscript):
+                    slice_repr = [assignment.value, assignment.slice.value]
+                    while not isinstance(slice_repr[0], nodes.Name):
+                        slice_repr = [
+                            slice_repr[0].value,
+                            slice_repr[0].slice.value,
+                        ] + slice_repr[1:]
+                    if (
+                        tuple(slice_repr[0].name) + tuple(slice_repr[1:])
+                        in format_calls
+                    ):
+                        return True
+                return False
+
+            if isinstance(node.parent, nodes.Assign):
+                return check_match_in_calls(node.parent.targets[0])
+            if isinstance(node.parent, nodes.Tuple):
+                node_index = node.parent.elts.index(node)
+                return check_match_in_calls(
+                    node.parent.parent.targets[0].elts[node_index]
+                )
+            return False
+
+        # Find all pairs of '{}' within a string
+        inner_matches = re.findall(r"(?<=\{).*?(?=\})", node.value)
+
+        # If a variable is used twice it is probably used for formatting later on
+        if len(inner_matches) != len(set(inner_matches)):
+            return
+
+        if (
+            isinstance(node.parent, nodes.Attribute)
+            and node.parent.attrname == "format"
+        ):
+            return
+
+        if inner_matches:
+            for match in inner_matches:
+                try:
+                    ast.parse(match, "<fstring>", "eval")
+                except SyntaxError:
+                    # Not valid python
+                    continue
+
+                if not detect_if_used_in_format(node):
+                    self.add_message(
+                        "possible-forgotten-f-prefix",
+                        line=node.lineno,
+                        node=node,
+                        args=(f"{{{match}}}",),
+                    )
 
     def _detect_u_string_prefix(self, node: nodes.Const) -> None:
         """Check whether strings include a 'u' prefix like u'String'."""
@@ -1011,6 +1109,8 @@ class StringConstantChecker(BaseTokenChecker, BaseRawFileChecker):
                 line=node.lineno,
                 col_offset=node.col_offset,
             )
+
+
 
 
 def register(linter: PyLinter) -> None:
